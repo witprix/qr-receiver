@@ -1,0 +1,1454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZIP Image Extractor & Image Paster</title>
+    
+    <!-- Load JSZip for extracting ZIP files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- Load jsPDF for PDF generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- Load Tesseract.js for OCR/Text Extraction -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js"></script>
+
+    <style>
+        :root {
+            --src-img-width: 25%;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --success: #10b981;
+            --success-hover: #059669;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            max-width: 1500px;
+            margin: 0 auto;
+            padding: 16px 20px; 
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.5;
+        }
+        
+        .header-title {
+            color: #0f172a;
+            margin-top: 0;
+            margin-bottom: 16px;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+        
+        /* --- HIGHLY COMPACT CONTROL PANEL --- */
+        .controls-card {
+            background: var(--card-bg);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 2px 4px -1px rgba(0,0,0,0.05);
+            padding: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .controls-top {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: flex-end;
+        }
+        
+        .upload-col {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            background: #f8fafc;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #cbd5e1;
+            flex: 1;
+            min-width: 210px;
+        }
+        
+        .upload-col label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #0f172a;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .upload-col small {
+            font-size: 11px;
+            font-weight: 400;
+            color: var(--text-muted);
+        }
+        
+        input[type="file"] {
+            font-size: 12px;
+            color: var(--text-muted);
+            width: 100%;
+        }
+        
+        input[type="file"]::file-selector-button {
+            padding: 4px 10px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background: #ffffff;
+            color: var(--text-main);
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+            margin-right: 8px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        input[type="file"]::file-selector-button:hover { background: #f1f5f9; }
+
+        .settings-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            flex: 1;
+            min-width: 280px;
+        }
+        
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f8fafc;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            font-size: 13px;
+            font-weight: 500;
+            height: 42px;
+        }
+        
+        .input-group input[type="number"], .input-group input[type="text"] {
+            padding: 4px 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .input-group input:focus { border-color: var(--primary); }
+        .input-group input[type="number"] { width: 50px; text-align: center; }
+        .input-group input[type="text"] { width: 120px; }
+        
+        .action-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+        }
+        
+        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        
+        button.action-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            background-color: var(--primary);
+            color: white;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            transition: background-color 0.2s, transform 0.1s;
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+        }
+        button.action-btn:hover:not(:disabled) { background-color: var(--primary-hover); }
+        button.action-btn:active:not(:disabled) { transform: scale(0.98); }
+        button.action-btn:disabled { background-color: #cbd5e1; cursor: not-allowed; box-shadow: none; color: #f8fafc; }
+        
+        button.small-btn {
+            padding: 6px 10px;
+            font-size: 12px;
+            background-color: #64748b;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        button.small-btn:hover { background-color: #475569; }
+
+        .status {
+            font-size: 13px;
+            color: var(--text-muted);
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* --- STICKY LAYOUT & TABS --- */
+        .main-layout {
+            display: flex;
+            gap: 24px;
+            align-items: flex-start;
+        }
+        
+        .sidebar, .right-sidebar {
+            flex-shrink: 0;
+            position: sticky;
+            top: 24px; 
+            z-index: 10;
+            background: var(--card-bg);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            padding: 16px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+            max-height: calc(100vh - 48px);
+            overflow-y: auto;
+        }
+
+        .sidebar { width: 180px; }
+        .right-sidebar { width: 180px; }
+        
+        .right-sidebar-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-top: 0;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .rs-control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        .rs-control-group label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        .rs-input-row {
+            display: flex;
+            gap: 6px;
+        }
+        .rs-input-row input {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            text-align: center;
+            font-family: inherit;
+        }
+
+        .content-area {
+            flex-grow: 1;
+            min-width: 0; 
+        }
+        
+        .tab-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        
+        .tab-btn {
+            padding: 10px 14px;
+            border: 1px solid transparent;
+            background: transparent;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-muted);
+            transition: all 0.2s;
+            text-align: left;
+        }
+        .tab-btn:hover:not(.active) { background: #f1f5f9; color: var(--text-main); }
+        .tab-btn.active {
+            background: #eff6ff;
+            color: var(--primary);
+            border-color: #bfdbfe;
+            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
+            transform: translateX(4px); 
+        }
+        .tab-content { display: none; contain: layout style; }
+        .tab-content.active { display: block; animation: fadeIn 0.3s ease-in-out; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* --- E2E ID BANNER --- */
+        .e2e-banner {
+            display: none; 
+            background: #f0fdf4;
+            border: 1px solid #a7f3d0;
+            padding: 12px 20px;
+            border-radius: var(--radius-md);
+            margin-bottom: 20px;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            box-shadow: 0 2px 4px rgba(16, 185, 129, 0.05);
+        }
+        .e2e-banner strong { color: #065f46; font-size: 13px; }
+        .e2e-banner .id-text {
+            font-family: ui-monospace, monospace;
+            font-weight: 600;
+            font-size: 13px;
+            color: #047857;
+            background: #fff;
+            padding: 6px 10px;
+            border-radius: 4px;
+            border: 1px solid #6ee7b7;
+            margin-top: 4px;
+            word-break: break-all;
+            display: inline-block;
+        }
+        .copy-btn {
+            background-color: var(--success);
+            color: white;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .copy-btn:hover { background-color: var(--success-hover); }
+
+        /* --- GRID & CARDS --- */
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr); 
+            gap: 24px;
+            transition: grid-template-columns 0.3s ease;
+        }
+        
+        .image-wrapper, .single-image-wrapper {
+            background: var(--card-bg);
+            padding: 14px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            position: relative;
+            cursor: grab;
+            transition: box-shadow 0.2s, transform 0.2s;
+        }
+        
+        .image-wrapper:active, .single-image-wrapper:active { cursor: grabbing; }
+        .image-wrapper:hover, .single-image-wrapper:hover { box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); }
+
+        .drag-over {
+            border: 2px dashed var(--primary) !important;
+            opacity: 0.8;
+            transform: scale(1.02);
+        }
+
+        .single-image-wrapper {
+            width: var(--src-img-width); 
+            min-width: 250px;
+            max-width: 100%;
+            margin: 0; 
+        }
+        
+        .image-wrapper img, .single-image-wrapper img {
+            width: 100%;
+            height: auto;
+            border-radius: 6px;
+            object-fit: contain;
+            border: 1px solid #f1f5f9;
+            background-color: #f8fafc;
+            pointer-events: none; /* Allows smooth dragging */
+        }
+        
+        .remove-btn {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background-color: var(--danger);
+            color: white;
+            border: 2px solid white;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            cursor: pointer;
+            transition: all 0.2s;
+            z-index: 10;
+            padding: 0;
+        }
+        .remove-btn:hover { background-color: var(--danger-hover); transform: scale(1.1); }
+
+        .image-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 1px solid #f1f5f9;
+            gap: 12px;
+        }
+        
+        .image-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 500;
+            word-break: break-all;
+            text-align: left;
+            margin: 0;
+            flex-grow: 1;
+        }
+        
+        .dl-btn, .zoom-btn {
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            border-radius: 6px;
+            padding: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .dl-btn:hover, .zoom-btn:hover {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .btn-controls {
+            display: flex;
+            gap: 6px;
+        }
+
+        /* --- MODAL (LIGHTBOX) STYLES --- */
+        .modal {
+            display: none; 
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(15, 23, 42, 0.9); /* Dark overlay */
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            padding: 20px;
+        }
+        
+        .modal-content {
+            max-width: 95%;
+            max-height: 85vh;
+            border-radius: 8px;
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            object-fit: contain;
+            border: 2px solid #334155;
+            background: #fff;
+        }
+        
+        .modal-close {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            color: #cbd5e1;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: color 0.2s;
+            z-index: 10000;
+        }
+        .modal-close:hover { color: #fff; }
+        
+        .modal-caption {
+            color: #f1f5f9;
+            margin-top: 15px;
+            font-size: 16px;
+            font-weight: 500;
+            text-align: center;
+        }
+
+        @media (max-width: 1024px) {
+            .main-layout { flex-direction: column; gap: 24px; }
+            .sidebar, .right-sidebar { width: 100%; position: static; transform: none; max-height: none; overflow: visible; }
+            .tab-bar { flex-direction: row; flex-wrap: wrap; }
+            .tab-btn { flex-grow: 1; text-align: center; }
+            .action-row { flex-direction: column; align-items: stretch; }
+            .btn-group { justify-content: center; }
+            .e2e-banner { flex-direction: column; align-items: stretch; text-align: center; }
+            .copy-btn { width: 100%; }
+            .rs-input-row { justify-content: flex-start; }
+            .rs-input-row input { width: 100px; }
+        }
+    </style>
+</head>
+<body>
+
+    <h2 class="header-title">ZIP Image Extractor & Image Paster</h2>
+    
+    <div class="controls-card">
+        <div class="controls-top">
+            <div class="upload-col">
+                <label>Android ZIP</label>
+                <input type="file" id="zipFileInput1" accept=".zip" />
+            </div>
+            <div class="upload-col">
+                <label>iOS ZIP</label>
+                <input type="file" id="zipFileInput2" accept=".zip" />
+            </div>
+            <div class="upload-col">
+                <label>
+                    Source Image(s)
+                    <small>Or paste (Ctrl+V) anywhere!</small>
+                </label>
+                <input type="file" id="sourceImageInput" accept="image/*" multiple />
+            </div>
+            
+            <div class="settings-group">
+                <div class="input-group">
+                    <label for="colCount">Images/Row:</label>
+                    <input type="number" id="colCount" min="1" max="12" value="4" />
+                </div>
+                <div class="input-group">
+                    <label for="rowSelection">Export Rows:</label>
+                    <input type="text" id="rowSelection" placeholder="e.g., 2, 3-5" title="Leave blank to export all images" />
+                </div>
+            </div>
+        </div>
+
+        <div class="action-row">
+            <div class="btn-group">
+                <button class="action-btn" onclick="exportPDF(false)" disabled>Export PDF (Active Tab)</button>
+                <button class="action-btn" onclick="exportPDF(true)" disabled>Export PDF (All Tabs)</button>
+                <button class="action-btn" onclick="exportHTML(false)" disabled>Export HTML (Active Tab)</button>
+                <button class="action-btn" onclick="exportHTML(true)" disabled>Export HTML (All Tabs)</button>
+            </div>
+            <span id="statusText" class="status">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                Ready. Upload a ZIP or Paste an image.
+            </span>
+        </div>
+    </div>
+
+    <div class="main-layout">
+        <!-- Left Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="tab-bar" id="tabBar">
+                <button class="tab-btn active" data-target="tab1" onclick="switchTab('tab1')">Android View</button>
+                <button class="tab-btn" data-target="tab2" onclick="switchTab('tab2')">iOS View</button>
+            </div>
+        </aside>
+
+        <!-- Center Image Content Area -->
+        <main class="content-area" id="contentArea">
+            <div id="tab1" class="tab-content active">
+                <div id="e2eBanner1" class="e2e-banner">
+                    <div>
+                        <strong>Android - E2E Request ID:</strong>
+                        <div id="e2eIdText1" class="id-text"></div>
+                    </div>
+                    <button class="copy-btn" onclick="copyId('e2eIdText1', this)">Copy ID</button>
+                </div>
+                <div id="imageContainer1" class="grid-container"></div>
+            </div>
+
+            <div id="tab2" class="tab-content">
+                <div id="e2eBanner2" class="e2e-banner">
+                    <div>
+                        <strong>iOS - E2E Request ID:</strong>
+                        <div id="e2eIdText2" class="id-text"></div>
+                    </div>
+                    <button class="copy-btn" onclick="copyId('e2eIdText2', this)">Copy ID</button>
+                </div>
+                <div id="imageContainer2" class="grid-container"></div>
+            </div>
+        </main>
+
+        <!-- Right Sidebar Settings -->
+        <aside class="right-sidebar">
+            <h3 class="right-sidebar-title">View Settings</h3>
+            <div class="rs-control-group">
+                <label for="srcSize">Source Img Size (%)</label>
+                <div class="rs-input-row">
+                    <input type="number" id="srcSize" min="10" max="100" value="25" />
+                    <button id="resetSrcSizeBtn" class="small-btn">Reset</button>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Modal Lightbox for Images -->
+    <div id="imgModal" class="modal" onclick="closeModal()">
+        <span class="modal-close">&times;</span>
+        <img class="modal-content" id="modalImage">
+        <div id="modalCaption" class="modal-caption"></div>
+    </div>
+
+    <script>
+        // State Management
+        let activeTabId = 'tab1';
+        let sourceImageCounter = 0;
+        let draggedItem = null;
+        
+        const tabData = {
+            tab1: { id: 'tab1', name: 'Android View', images: [], e2eId: null, isGrid: true },
+            tab2: { id: 'tab2', name: 'iOS View', images: [], e2eId: null, isGrid: true }
+        };
+
+        // Elements
+        const zipFileInput1 = document.getElementById('zipFileInput1');
+        const zipFileInput2 = document.getElementById('zipFileInput2');
+        const sourceImageInput = document.getElementById('sourceImageInput');
+        const colCountInput = document.getElementById('colCount');
+        const rowSelectionInput = document.getElementById('rowSelection');
+        const srcSizeInput = document.getElementById('srcSize');
+        const resetSrcSizeBtn = document.getElementById('resetSrcSizeBtn');
+        const statusText = document.getElementById('statusText');
+        const tabBar = document.getElementById('tabBar');
+        const contentArea = document.getElementById('contentArea');
+
+        // Modal Logic
+        window.openModal = function(src, name) {
+            const modal = document.getElementById('imgModal');
+            document.getElementById('modalImage').src = src;
+            document.getElementById('modalCaption').textContent = name;
+            modal.style.display = 'flex';
+        };
+
+        window.closeModal = function() {
+            document.getElementById('imgModal').style.display = 'none';
+        };
+
+        // Escape key closes modal
+        document.addEventListener('keydown', function(event) {
+            if (event.key === "Escape") {
+                window.closeModal();
+            }
+        });
+
+        function blobToDataURL(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        // Filenames come from ZIP entries (or pasted files) and are attacker/
+        // environment controlled — they get inserted into innerHTML as text
+        // and attribute values, so they MUST be escaped or a crafted filename
+        // like `x.png"><img src=x onerror=alert(1)>` executes as script.
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // dataUrl (base64) is only actually needed for PDF/HTML export, not
+        // for on-screen display (blobUrl covers that far more cheaply). Compute
+        // it lazily and cache it, instead of eagerly doubling memory for every
+        // image the moment a ZIP is loaded. This also fixes a real bug: pasted
+        // "Source Image" tabs never had a dataUrl computed at all in the
+        // previous version, so exporting them to PDF/HTML silently failed.
+        async function ensureDataUrl(imgObj) {
+            if (!imgObj.dataUrl) {
+                imgObj.dataUrl = await blobToDataURL(imgObj.blob);
+            }
+            return imgObj.dataUrl;
+        }
+
+        function updateStatus(msg) {
+            statusText.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> ${msg}`;
+        }
+
+        function updateExportButtons() {
+            const hasAnyImages = Object.values(tabData).some(t => {
+                const container = t.isGrid ? document.getElementById(`imageContainer${t.id.slice(-1)}`) : document.getElementById(t.id);
+                return container && container.querySelectorAll('.image-wrapper, .single-image-wrapper').length > 0;
+            });
+            document.querySelectorAll('.action-btn').forEach(btn => btn.disabled = !hasAnyImages);
+        }
+
+        colCountInput.addEventListener('input', function() {
+            const cols = parseInt(this.value) || 4;
+            document.querySelectorAll('.grid-container').forEach(container => {
+                container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+            });
+        });
+
+        function updateSourceImageSize() {
+            let val = parseInt(srcSizeInput.value) || 25;
+            if(val < 10) val = 10;
+            if(val > 100) val = 100;
+            document.documentElement.style.setProperty('--src-img-width', val + '%');
+        }
+        srcSizeInput.addEventListener('input', updateSourceImageSize);
+        resetSrcSizeBtn.addEventListener('click', () => { srcSizeInput.value = 25; updateSourceImageSize(); });
+
+        window.switchTab = function(targetTabId) {
+            activeTabId = targetTabId;
+            requestAnimationFrame(() => {
+                document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+                document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+                
+                const targetContent = document.getElementById(targetTabId);
+                if (targetContent) targetContent.classList.add('active');
+                
+                const targetBtn = document.querySelector(`.tab-btn[data-target="${targetTabId}"]`);
+                if (targetBtn) targetBtn.classList.add('active');
+            });
+        };
+
+        window.copyId = function(textElementId, btnElement) {
+            const textToCopy = document.getElementById(textElementId).textContent;
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                const originalText = btnElement.textContent;
+                btnElement.textContent = "Copied!";
+                setTimeout(() => { btnElement.textContent = originalText; }, 2000);
+            });
+        };
+
+        window.downloadSingleImage = function(dataUrl, filename) {
+            const link = document.createElement('a');
+            link.href = dataUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        // --- DOM Delegation for Remove Image --- //
+        window.removeImage = function(tabId, imageId, btnElement) {
+            const wrapper = btnElement.closest('.image-wrapper') || btnElement.closest('.single-image-wrapper');
+            if (wrapper) wrapper.remove();
+
+            const removedImg = tabData[tabId].images.find(img => img.id === imageId);
+            if (removedImg && removedImg.blobUrl) URL.revokeObjectURL(removedImg.blobUrl); // avoid leaking the object URL
+
+            tabData[tabId].images = tabData[tabId].images.filter(img => img.id !== imageId);
+            updateExportButtons();
+
+            if (tabData[tabId].images.length === 0 && !tabData[tabId].isGrid) {
+                document.querySelector(`.tab-btn[data-target="${tabId}"]`)?.remove();
+                document.getElementById(tabId)?.remove();
+                delete tabData[tabId];
+                if (activeTabId === tabId) switchTab('tab1');
+            }
+        };
+
+        function syncStateFromDOM(tabId) {
+            const tData = tabData[tabId];
+            const container = tData.isGrid ? document.getElementById(`imageContainer${tabId.slice(-1)}`) : document.getElementById(tabId);
+            
+            const currentImagesMap = {};
+            tData.images.forEach(img => currentImagesMap[img.id] = img);
+            
+            const newImagesArray = [];
+            const wrappers = container.querySelectorAll('.image-wrapper, .single-image-wrapper');
+            
+            wrappers.forEach(wrapper => {
+                const id = wrapper.dataset.id;
+                if (currentImagesMap[id]) newImagesArray.push(currentImagesMap[id]);
+            });
+            
+            tData.images = newImagesArray;
+        }
+
+        // --- DRAG AND DROP --- //
+        function makeDraggable(element, tabId) {
+            element.draggable = true;
+            element.dataset.tabId = tabId;
+
+            element.addEventListener('dragstart', function(e) {
+                draggedItem = this;
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', this.dataset.id);
+                setTimeout(() => this.style.opacity = '0.4', 0);
+            });
+
+            element.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                return false;
+            });
+
+            element.addEventListener('dragenter', function(e) {
+                e.preventDefault();
+                if (draggedItem && this !== draggedItem && draggedItem.dataset.tabId === this.dataset.tabId) {
+                    this.classList.add('drag-over');
+                }
+            });
+
+            element.addEventListener('dragleave', function() {
+                this.classList.remove('drag-over');
+            });
+
+            element.addEventListener('drop', function(e) {
+                e.stopPropagation();
+                this.classList.remove('drag-over');
+                
+                if (draggedItem && draggedItem !== this && draggedItem.dataset.tabId === this.dataset.tabId) {
+                    const allItems = [...this.parentNode.children];
+                    const draggedIndex = allItems.indexOf(draggedItem);
+                    const targetIndex = allItems.indexOf(this);
+                    
+                    if (draggedIndex < targetIndex) {
+                        this.parentNode.insertBefore(draggedItem, this.nextSibling);
+                    } else {
+                        this.parentNode.insertBefore(draggedItem, this);
+                    }
+                    syncStateFromDOM(this.dataset.tabId);
+                }
+                return false;
+            });
+
+            element.addEventListener('dragend', function() {
+                this.style.opacity = '1';
+                document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            });
+        }
+
+        function generateImageCardHtml(imgObj, tabId, isExport = false) {
+            const removeBtn = isExport ? '' : `
+                <button class="remove-btn" onclick="removeImage('${tabId}', '${imgObj.id}', this)" title="Remove Image">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>`;
+            const imgUrl = isExport ? imgObj.dataUrl : imgObj.blobUrl;
+            const safeName = escapeHtml(imgObj.name);
+
+            // zoom-btn/dl-btn intentionally have NO onclick with interpolated
+            // filename/URL strings — that was the XSS vector (a crafted ZIP
+            // filename could break out of the quoted onclick argument). They're
+            // handled instead by a delegated click listener that reads src/alt
+            // straight off the sibling <img> element (browser-decoded, so no
+            // manual escaping needed on the read side).
+            return `
+                ${removeBtn}
+                <img src="${imgUrl}" alt="${safeName}" loading="lazy" draggable="false" />
+                <div class="image-footer">
+                    <p class="image-label" title="${safeName}">${safeName}</p>
+                    <div class="btn-controls">
+                        <button class="zoom-btn" title="Enlarge Image">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                <line x1="11" y1="8" x2="11" y2="14"></line>
+                                <line x1="8" y1="11" x2="14" y2="11"></line>
+                            </svg>
+                        </button>
+                        <button class="dl-btn" title="Download Image">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Delegated handler for zoom/download — reads directly off the <img>
+        // in the same wrapper instead of trusting any interpolated string.
+        function handleImageActionClick(e) {
+            const zoomBtn = e.target.closest('.zoom-btn');
+            const dlBtn = e.target.closest('.dl-btn');
+            if (!zoomBtn && !dlBtn) return;
+            const wrapper = (zoomBtn || dlBtn).closest('.image-wrapper, .single-image-wrapper');
+            const img = wrapper && wrapper.querySelector('img');
+            if (!img) return;
+            if (zoomBtn) window.openModal(img.src, img.alt);
+            else window.downloadSingleImage(img.src, img.alt);
+        }
+        contentArea.addEventListener('click', handleImageActionClick);
+
+        // Parse User Row Selection based on CURRENT DOM order
+        function getImagesToExport(tabId) {
+            const tData = tabData[tabId];
+            const container = tData.isGrid ? document.getElementById(`imageContainer${tabId.slice(-1)}`) : document.getElementById(tabId);
+            
+            if (!container) return [];
+
+            const wrappers = container.querySelectorAll('.image-wrapper, .single-image-wrapper');
+            let currentOrderedImages = [];
+            
+            wrappers.forEach(wrapper => {
+                const imgId = wrapper.dataset.id;
+                const imgObj = tData.images.find(img => img.id === imgId);
+                if (imgObj) currentOrderedImages.push(imgObj);
+            });
+
+            if (!tData.isGrid) return currentOrderedImages;
+
+            const cols = parseInt(colCountInput.value) || 4;
+            const rowStr = rowSelectionInput.value.trim();
+            
+            if (!rowStr) return currentOrderedImages;
+
+            let selectedRows = new Set();
+            let parts = rowStr.split(',');
+            
+            for (let part of parts) {
+                part = part.trim();
+                if (part.includes('-')) {
+                    let [start, end] = part.split('-').map(Number);
+                    if (start && end && start <= end) {
+                        for (let i = start; i <= end; i++) selectedRows.add(i);
+                    }
+                } else {
+                    let num = Number(part);
+                    if (num) selectedRows.add(num);
+                }
+            }
+
+            let filteredImages = [];
+            currentOrderedImages.forEach((imgObj, currentIndex) => {
+                const rowIndex = Math.floor(currentIndex / cols) + 1;
+                if (selectedRows.has(rowIndex)) {
+                    filteredImages.push(imgObj);
+                }
+            });
+
+            return filteredImages;
+        }
+
+        // Handle Source Images
+        function processSourceImage(file) {
+            sourceImageCounter++;
+            const tabId = `tab_src_${sourceImageCounter}`;
+            const tabName = `Source Image ${sourceImageCounter}`;
+            const safeFileName = file.name || `Pasted_Image_${sourceImageCounter}.png`;
+            const imageId = 'img_' + Math.random().toString(36).substr(2, 9);
+            
+            const blobUrl = URL.createObjectURL(file);
+            const imgObj = { id: imageId, name: safeFileName, blob: file, blobUrl: blobUrl };
+            
+            tabData[tabId] = { id: tabId, name: tabName, images: [imgObj], e2eId: null, isGrid: false };
+
+            const btn = document.createElement('button');
+            btn.className = 'tab-btn';
+            btn.setAttribute('data-target', tabId);
+            btn.onclick = function() { switchTab(tabId); };
+            btn.textContent = tabName;
+            tabBar.appendChild(btn);
+
+            const contentDiv = document.createElement('div');
+            contentDiv.id = tabId;
+            contentDiv.className = 'tab-content';
+            
+            const wrapper = document.createElement('div');
+            wrapper.className = 'single-image-wrapper';
+            wrapper.dataset.id = imageId;
+            wrapper.innerHTML = generateImageCardHtml(imgObj, tabId, false);
+            
+            makeDraggable(wrapper, tabId);
+            contentDiv.appendChild(wrapper);
+            contentArea.appendChild(contentDiv);
+
+            updateExportButtons();
+            switchTab(tabId);
+            updateStatus(`Loaded ${tabName}.`);
+        }
+
+        sourceImageInput.addEventListener('change', function(e) {
+            const files = e.target.files;
+            for(let i=0; i<files.length; i++) processSourceImage(files[i]);
+            this.value = ''; 
+        });
+
+        window.addEventListener('paste', function(e) {
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            let foundImage = false;
+            for (let index in items) {
+                const item = items[index];
+                if (item.kind === 'file' && item.type.startsWith('image/')) {
+                    const blob = item.getAsFile();
+                    processSourceImage(blob);
+                    foundImage = true;
+                }
+            }
+            if(foundImage) e.preventDefault(); 
+        });
+
+        // Reused across every OCR call instead of letting Tesseract.recognize()
+        // spin up (and tear down) a fresh worker per image — for a tab with many
+        // screenshots this was the single biggest OCR performance cost.
+        let ocrWorkerPromise = null;
+        function getOcrWorker() {
+            if (!ocrWorkerPromise) ocrWorkerPromise = Tesseract.createWorker('eng', 1, { logger: () => {} });
+            return ocrWorkerPromise;
+        }
+
+        async function runBackgroundOCR(tabId) {
+            const images = tabData[tabId].images;
+            if (!images || images.length === 0) return;
+
+            let worker;
+            try { worker = await getOcrWorker(); } catch (err) { return; }
+
+            for (let i = images.length - 1; i >= 0; i--) {
+                if (tabData[tabId].e2eId) break; 
+                try {
+                    const dataUrl = await ensureDataUrl(images[i]); // reuses cached copy instead of re-encoding
+                    const { data: { text } } = await worker.recognize(dataUrl);
+                    
+                    const match = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[0-9a-f]+/i) || 
+                                  text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+                    
+                    if (match) {
+                        tabData[tabId].e2eId = match[0];
+                        const idText = document.getElementById(`e2eIdText${tabId.slice(-1)}`);
+                        const banner = document.getElementById(`e2eBanner${tabId.slice(-1)}`);
+                        if (idText && banner) {
+                            idText.textContent = match[0];
+                            banner.style.display = 'flex';
+                        }
+                        break; 
+                    }
+                } catch (err) {}
+            }
+        }
+
+        // Master ZIP Processing
+        async function handleZipUpload(file, tabId) {
+            if (!file) return;
+
+            updateStatus(`Extracting ${tabData[tabId].name} images...`);
+            
+            const container = document.getElementById(`imageContainer${tabId.slice(-1)}`);
+            const banner = document.getElementById(`e2eBanner${tabId.slice(-1)}`);
+            const idText = document.getElementById(`e2eIdText${tabId.slice(-1)}`);
+            
+            // Revoke any blob URLs from a previous extraction into this tab —
+            // otherwise re-uploading a ZIP into the same tab leaks every blob
+            // URL from the prior load, unboundedly, for the life of the page.
+            tabData[tabId].images.forEach(img => { if (img.blobUrl) URL.revokeObjectURL(img.blobUrl); });
+
+            container.innerHTML = '';
+            tabData[tabId].images = [];
+            tabData[tabId].e2eId = null;
+            banner.style.display = 'none';
+
+            try {
+                const jszip = new JSZip();
+                const zip = await jszip.loadAsync(file);
+                
+                let fileNames = Object.keys(zip.files).filter(name => {
+                    return !name.startsWith('__MACOSX/') && !name.includes('.DS_Store') && name.match(/\.(jpg|jpeg|png|gif)$/i);
+                });
+
+                if (fileNames.length === 0) {
+                    updateStatus("No valid images found in the ZIP.");
+                    return;
+                }
+
+                fileNames.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+                const fragment = document.createDocumentFragment();
+                let processedCount = 0;
+
+                for (const name of fileNames) {
+                    processedCount++;
+                    if (processedCount % 5 === 0 || processedCount === fileNames.length) {
+                        updateStatus(`Extracting ${tabData[tabId].name} images... (${processedCount}/${fileNames.length})`);
+                    }
+                    const zipEntry = zip.files[name];
+                    const ext = name.split('.').pop().toLowerCase();
+                    const mimeType = ext === 'png' ? 'image/png' : (ext === 'gif' ? 'image/gif' : 'image/jpeg');
+                    
+                    const arrayBuffer = await zipEntry.async("arraybuffer");
+                    const blob = new Blob([arrayBuffer], { type: mimeType });
+                    const blobUrl = URL.createObjectURL(blob);
+
+                    // dataUrl is NOT precomputed here anymore — see ensureDataUrl().
+                    // For a ZIP with dozens of screenshots this avoids holding two
+                    // full copies (blob + base64 text, ~33% larger) of every image
+                    // in memory before the user has even asked to export anything.
+                    const imageId = (crypto.randomUUID ? crypto.randomUUID() : 'img_' + Math.random().toString(36).substr(2, 9));
+                    const imgObj = { id: imageId, name: name, blob: blob, blobUrl: blobUrl };
+                    
+                    tabData[tabId].images.push(imgObj);
+
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'image-wrapper';
+                    wrapper.dataset.id = imageId;
+                    wrapper.innerHTML = generateImageCardHtml(imgObj, tabId, false);
+                    
+                    makeDraggable(wrapper, tabId);
+                    fragment.appendChild(wrapper);
+                }
+
+                container.appendChild(fragment);
+
+                updateStatus(`Extracted ${tabData[tabId].images.length} images for ${tabData[tabId].name}.`);
+                updateExportButtons();
+                switchTab(tabId);
+
+                setTimeout(() => runBackgroundOCR(tabId), 100);
+
+            } catch (error) {
+                console.error(error);
+                updateStatus("Error extracting ZIP file. Ensure it is a valid ZIP.");
+            }
+            
+            document.getElementById(`zipFileInput${tabId.slice(-1)}`).value = '';
+        }
+
+        zipFileInput1.addEventListener('change', (e) => handleZipUpload(e.target.files[0], 'tab1'));
+        zipFileInput2.addEventListener('change', (e) => handleZipUpload(e.target.files[0], 'tab2'));
+
+        // ==========================================
+        // HTML EXPORT
+        // ==========================================
+        window.exportHTML = async function(allTabs) {
+            updateStatus("Preparing HTML export...");
+            const cols = parseInt(colCountInput.value) || 4;
+            const srcSizePct = parseInt(srcSizeInput.value) || 25;
+            
+            let tabsHtml = '';
+            let contentHtml = '';
+            let isFirst = true;
+            let hasAnyImages = false;
+
+            const tabsToProcess = allTabs ? Object.keys(tabData) : [activeTabId];
+
+            // The exported file is static — it can't reference live blob URLs from
+            // this page, so every image needs its base64 dataUrl populated before
+            // we build the HTML string. This also fixes pasted "Source Image" tabs,
+            // which never got a dataUrl at all previously and exported broken.
+            for (const tId of tabsToProcess) {
+                await Promise.all(getImagesToExport(tId).map(ensureDataUrl));
+            }
+
+            for (const tId of tabsToProcess) {
+                const tData = tabData[tId];
+                const imagesToExport = getImagesToExport(tId);
+                
+                if (imagesToExport.length === 0) continue;
+                hasAnyImages = true;
+
+                const activeClass = isFirst ? 'active' : '';
+                tabsHtml += `<button class="tab-btn ${activeClass}" data-target="${tId}" onclick="switchTab('${tId}')">${tData.name}</button>`;
+                
+                let innerContent = '';
+                if (tData.isGrid) {
+                    const e2eHtml = tData.e2eId ? `
+                        <div class="e2e-banner" style="display:flex;">
+                            <div><strong>${tData.name} - E2E Request ID:</strong><div id="export_e2e_${tId}" class="id-text">${tData.e2eId}</div></div>
+                            <button class="copy-btn" onclick="copyId('export_e2e_${tId}', this)">Copy ID</button>
+                        </div>` : "";
+                    
+                    const gridHtml = imagesToExport.map(img => `<div class="image-wrapper">${generateImageCardHtml(img, tId, true)}</div>`).join('');
+                    innerContent = `${e2eHtml}<div class="grid-container" style="grid-template-columns: repeat(${cols}, 1fr);">${gridHtml}</div>`;
+                } else {
+                    innerContent = `
+                    <div class="single-image-wrapper">
+                        ${generateImageCardHtml(imagesToExport[0], tId, true)}
+                    </div>`;
+                }
+
+                contentHtml += `<div id="${tId}" class="tab-content ${activeClass}">${innerContent}</div>`;
+                isFirst = false;
+            }
+
+            if (!hasAnyImages) {
+                alert("No images available to export based on your selection.");
+                updateStatus("Ready.");
+                return;
+            }
+
+            const pageStyles = document.querySelector('style').innerHTML;
+            const dynamicStyles = `
+                :root { --src-img-width: ${srcSizePct}%; }
+                .single-image-wrapper { width: var(--src-img-width) !important; max-width: 100% !important; }
+            `;
+
+            let htmlDoc = `
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <title>Extracted Images Export</title>
+                <style>
+                    ${pageStyles}
+                    ${dynamicStyles}
+                    body { padding: 40px 20px; }
+                    .right-sidebar { display: none !important; }
+                    .image-wrapper, .single-image-wrapper { cursor: default; }
+                    .image-wrapper:hover, .single-image-wrapper:hover { box-shadow: 0 2px 4px rgba(0,0,0,0.04); }
+                </style>
+            </head>
+            <body>
+                <h1 class="header-title" style="text-align: center;">Extracted UI Screenshots</h1>
+                <div class="main-layout">
+                    <aside class="sidebar">
+                        <div class="tab-bar">${tabsHtml}</div>
+                    </aside>
+                    <main class="content-area">${contentHtml}</main>
+                </div>
+                
+                <!-- Modal Lightbox for Images -->
+                <div id="imgModal" class="modal" onclick="closeModal()">
+                    <span class="modal-close">&times;</span>
+                    <img class="modal-content" id="modalImage">
+                    <div id="modalCaption" class="modal-caption"></div>
+                </div>
+
+                <script>
+                    function switchTab(targetTabId) {
+                        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+                        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+                        document.getElementById(targetTabId).classList.add('active');
+                        document.querySelector('.tab-btn[data-target="' + targetTabId + '"]').classList.add('active');
+                        window.scrollTo(0, 0); 
+                    }
+                    window.downloadSingleImage = ${window.downloadSingleImage.toString()};
+                    window.copyId = ${window.copyId.toString()};
+                    window.openModal = ${window.openModal.toString()};
+                    window.closeModal = ${window.closeModal.toString()};
+                    document.addEventListener('keydown', function(event) { if (event.key === "Escape") { window.closeModal(); } });
+                    // zoom-btn/dl-btn have no onclick (see escapeHtml note in the
+                    // live app) — same delegated-click approach needed here.
+                    document.querySelector('.content-area').addEventListener('click', function(e) {
+                        const zoomBtn = e.target.closest('.zoom-btn');
+                        const dlBtn = e.target.closest('.dl-btn');
+                        if (!zoomBtn && !dlBtn) return;
+                        const wrapper = (zoomBtn || dlBtn).closest('.image-wrapper, .single-image-wrapper');
+                        const img = wrapper && wrapper.querySelector('img');
+                        if (!img) return;
+                        if (zoomBtn) window.openModal(img.src, img.alt);
+                        else window.downloadSingleImage(img.src, img.alt);
+                    });
+                <\/script>
+            </body>
+            </html>`;
+
+            const blob = new Blob([htmlDoc], { type: "text/html" });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = "extracted_images_view.html";
+            link.click();
+            updateStatus("HTML Export complete!");
+        };
+
+        // ==========================================
+        // PDF EXPORT
+        // ==========================================
+        window.exportPDF = async function(allTabs) {
+            updateStatus(`Generating PDF...`);
+
+            const tabsForDataUrls = allTabs ? Object.keys(tabData) : [activeTabId];
+            for (const tId of tabsForDataUrls) {
+                // Populate dataUrl up front so the rendering loop below can stay
+                // synchronous. Also fixes pasted "Source Image" tabs, which never
+                // had a dataUrl computed at all previously and exported broken.
+                await Promise.all(getImagesToExport(tId).map(ensureDataUrl));
+            }
+
+            setTimeout(() => {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF();
+                
+                const margin = 14; 
+                const standardWidth = doc.internal.pageSize.getWidth();
+                const standardHeight = doc.internal.pageSize.getHeight();
+                
+                const drawPageBackground = (w, h) => {
+                    doc.setFillColor(248, 250, 252); 
+                    doc.rect(0, 0, w, h, 'F');
+                };
+                
+                const tabsToProcess = allTabs ? Object.keys(tabData) : [activeTabId];
+                let isFirstPage = true;
+                let hasAnyImages = false;
+
+                for (const tId of tabsToProcess) {
+                    const tData = tabData[tId];
+                    const imagesToExport = getImagesToExport(tId);
+                    
+                    if (imagesToExport.length === 0) continue;
+                    hasAnyImages = true;
+
+                    if (!isFirstPage) doc.addPage();
+                    drawPageBackground(standardWidth, standardHeight);
+                    isFirstPage = false;
+                    
+                    let cursorY = margin;
+                    doc.setFontSize(16);
+                    doc.setTextColor(15, 23, 42); 
+                    doc.text(`Extracted UI Screenshots (${tData.name})`, margin, cursorY + 4);
+                    cursorY += 14;
+
+                    const cardPadding = 6; 
+
+                    if (tData.isGrid) {
+                        const cols = parseInt(colCountInput.value) || 4;
+                        const gap = 8; 
+                        const availableWidth = standardWidth - (margin * 2);
+                        const colWidth = (availableWidth - (gap * (cols - 1))) / cols;
+                        const imgTargetWidth = colWidth - (cardPadding * 2); 
+
+                        if (tData.e2eId) {
+                            doc.setFontSize(10);
+                            doc.setTextColor(2, 132, 199); 
+                            doc.text(`E2E Request ID: ${tData.e2eId}`, margin, cursorY);
+                            cursorY += 12;
+                        }
+
+                        const container = document.getElementById(tId).querySelector('.grid-container');
+
+                        for (let i = 0; i < imagesToExport.length; i += cols) {
+                            const rowImages = imagesToExport.slice(i, i + cols);
+                            let maxRowHeight = 0;
+
+                            const rowHeights = rowImages.map((imgObj) => {
+                                const wrapper = container.querySelector(`[data-id="${imgObj.id}"]`);
+                                const imgElement = wrapper.querySelector('img');
+                                const ratio = imgElement.naturalHeight / imgElement.naturalWidth;
+                                const imgHeight = imgTargetWidth * ratio;
+                                
+                                doc.setFontSize(8);
+                                const textLines = doc.splitTextToSize(imgObj.name, imgTargetWidth);
+                                const textHeight = textLines.length * 3.5; 
+                                
+                                const totalCardHeight = cardPadding + imgHeight + 4 + textHeight + cardPadding + 2;
+                                if (totalCardHeight > maxRowHeight) maxRowHeight = totalCardHeight;
+                                
+                                return { imgHeight, textLines };
+                            });
+
+                            if (cursorY + maxRowHeight > standardHeight - margin) {
+                                doc.addPage();
+                                drawPageBackground(standardWidth, standardHeight); 
+                                cursorY = margin;
+                            }
+
+                            rowImages.forEach((imgObj, index) => {
+                                const colIdx = index;
+                                const xOffset = margin + (colIdx * (colWidth + gap));
+                                const itemData = rowHeights[index];
+                                
+                                doc.setFillColor(255, 255, 255); 
+                                doc.setDrawColor(226, 232, 240); 
+                                doc.setLineWidth(0.2);
+                                doc.roundedRect(xOffset, cursorY, colWidth, maxRowHeight, 2, 2, 'FD'); 
+
+                                doc.setDrawColor(241, 245, 249);
+                                doc.rect(xOffset + cardPadding, cursorY + cardPadding, imgTargetWidth, itemData.imgHeight, 'S');
+
+                                const ext = imgObj.name.split('.').pop().toLowerCase();
+                                const imgFormat = ext === 'png' ? 'PNG' : (ext === 'gif' ? 'GIF' : 'JPEG');
+                                doc.addImage(imgObj.dataUrl, imgFormat, xOffset + cardPadding, cursorY + cardPadding, imgTargetWidth, itemData.imgHeight);
+                                
+                                doc.setFontSize(8);
+                                doc.setTextColor(100, 116, 139); 
+                                const textX = xOffset + cardPadding; 
+                                const textY = cursorY + cardPadding + itemData.imgHeight + 6; 
+                                doc.text(itemData.textLines, textX, textY, { align: "left" });
+                            });
+
+                            cursorY += maxRowHeight + gap;
+                        }
+                    } else {
+                        const imgObj = imagesToExport[0];
+                        const container = document.getElementById(tId);
+                        const wrapper = container.querySelector(`[data-id="${imgObj.id}"]`);
+                        const imgElement = wrapper.querySelector('img');
+                        const ratio = imgElement.naturalHeight / imgElement.naturalWidth;
+                        
+                        const srcSizePct = parseInt(srcSizeInput.value) || 25;
+                        let pdfWrapperWidth = (standardWidth - (margin * 2)) * (srcSizePct / 100);
+                        if (pdfWrapperWidth < 50) pdfWrapperWidth = 50; 
+                        
+                        let imgTargetWidth = pdfWrapperWidth - (cardPadding * 2);
+                        let imgHeight = imgTargetWidth * ratio;
+                        
+                        doc.setFontSize(9);
+                        const textLines = doc.splitTextToSize(imgObj.name, imgTargetWidth);
+                        const textHeight = textLines.length * 4; 
+                        
+                        let totalCardHeight = cardPadding + imgHeight + 4 + textHeight + cardPadding + 2;
+
+                        let targetPageHeight = standardHeight;
+                        
+                        if (cursorY + totalCardHeight > standardHeight - margin) {
+                            if (totalCardHeight > standardHeight - (margin * 2)) {
+                                targetPageHeight = totalCardHeight + (margin * 2);
+                                doc.addPage([standardWidth, targetPageHeight]);
+                            } else {
+                                doc.addPage();
+                            }
+                            drawPageBackground(standardWidth, targetPageHeight);
+                            cursorY = margin;
+                        }
+                        
+                        const xOffset = margin; 
+                        
+                        doc.setFillColor(255, 255, 255); 
+                        doc.setDrawColor(226, 232, 240); 
+                        doc.setLineWidth(0.2);
+                        doc.roundedRect(xOffset, cursorY, pdfWrapperWidth, totalCardHeight, 2, 2, 'FD'); 
+                        
+                        doc.setDrawColor(241, 245, 249);
+                        doc.rect(xOffset + cardPadding, cursorY + cardPadding, imgTargetWidth, imgHeight, 'S');
+
+                        const ext = imgObj.name.split('.').pop().toLowerCase();
+                        const imgFormat = ext === 'png' ? 'PNG' : (ext === 'gif' ? 'GIF' : 'JPEG');
+                        
+                        doc.addImage(imgObj.dataUrl, imgFormat, xOffset + cardPadding, cursorY + cardPadding, imgTargetWidth, imgHeight);
+
+                        doc.setFontSize(8);
+                        doc.setTextColor(100, 116, 139); 
+                        const textX = xOffset + cardPadding; 
+                        const textY = cursorY + cardPadding + imgHeight + 6; 
+                        doc.text(textLines, textX, textY, { align: "left" });
+                    }
+                }
+
+                if (!hasAnyImages) {
+                    alert("No images available to export based on your selection.");
+                    updateStatus(`Ready.`);
+                    return;
+                }
+
+                doc.save(allTabs ? "extracted_images_all.pdf" : `extracted_images_${tabData[activeTabId].name.replace(/\s+/g, '_').toLowerCase()}.pdf`);
+                updateStatus(`PDF Generated Successfully!`);
+            }, 100);
+        };
+    </script>
+</body>
+</html>
