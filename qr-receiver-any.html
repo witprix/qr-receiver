@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>QR Receiver — Scan, Meter, Reconstruct</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<style>
+  :root{
+    --bg:#0A0D12;
+    --surface:#131822;
+    --surface-2:#1B222E;
+    --line:#232B38;
+    --cyan:#37E6C4;
+    --amber:#FFB454;
+    --text:#E8ECF1;
+    --muted:#7C8798;
+    --danger:#FF6B6B;
+    --ok:#37E6C4;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'IBM Plex Mono',monospace;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding:20px 16px 48px;
+  }
+  h1{
+    font-family:'Space Grotesk',sans-serif;
+    font-size:21px;
+    font-weight:700;
+    letter-spacing:0.01em;
+    margin:4px 0 2px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  .dot-live{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber);}
+  .dot-live.on{background:var(--cyan);box-shadow:0 0 8px var(--cyan);animation:pulse 1.6s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.4;transform:scale(0.7);}}
+  .subtitle{color:var(--muted);font-size:12.5px;margin-bottom:18px;text-align:center;max-width:380px;line-height:1.55;}
+
+  .viewfinder{position:relative;width:100%;max-width:400px;aspect-ratio:1/1;background:#000;border-radius:16px;overflow:hidden;border:1px solid var(--line);}
+  video{width:100%;height:100%;object-fit:cover;display:block;}
+  .frame-overlay{position:absolute;inset:0;pointer-events:none;}
+  .corner{position:absolute;width:26px;height:26px;border:3px solid var(--cyan);opacity:0.85;}
+  .corner.tl{top:16px;left:16px;border-right:none;border-bottom:none;border-radius:6px 0 0 0;}
+  .corner.tr{top:16px;right:16px;border-left:none;border-bottom:none;border-radius:0 6px 0 0;}
+  .corner.bl{bottom:16px;left:16px;border-right:none;border-top:none;border-radius:0 0 0 6px;}
+  .corner.br{bottom:16px;right:16px;border-left:none;border-top:none;border-radius:0 0 6px 0;}
+  .sweep{position:absolute;left:14px;right:14px;height:2px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);top:16px;animation:sweep 2.2s linear infinite;box-shadow:0 0 10px var(--cyan);}
+  @keyframes sweep{0%{top:16px;}50%{top:calc(100% - 16px);}100%{top:16px;}}
+  .flash{position:absolute;inset:0;background:rgba(55,230,196,0.18);opacity:0;transition:opacity .1s ease;}
+  .flash.on{opacity:1;}
+  .flash.err{background:rgba(255,107,107,0.22);}
+
+  .status-bar{width:100%;max-width:400px;display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-top:10px;flex-wrap:wrap;gap:4px;}
+  .status-bar b{color:var(--cyan);}
+  .status-bar b.err{color:var(--danger);}
+
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;width:100%;max-width:400px;margin-top:14px;display:none;}
+  .card.show{display:block;}
+  .card-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .filename{color:var(--amber);font-size:12px;word-break:break-all;}
+  .meta-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px;}
+  .meta-row b{color:var(--text);}
+
+  .grid-dots{display:flex;flex-wrap:wrap;gap:5px;margin-top:12px;max-height:120px;overflow-y:auto;}
+  .cdot{width:9px;height:9px;border-radius:2px;background:var(--surface-2);border:1px solid var(--line);flex-shrink:0;}
+  .cdot.have{background:var(--cyan);border-color:var(--cyan);}
+  .cdot.bad{background:var(--danger);border-color:var(--danger);}
+
+  .progress-line{font-size:12px;color:var(--muted);margin-top:10px;}
+  .progress-line b{color:var(--text);}
+  .integrity{font-size:11.5px;margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);}
+  .integrity.ok{color:var(--ok);border-color:rgba(55,230,196,0.4);}
+  .integrity.bad{color:var(--danger);border-color:rgba(255,107,107,0.4);}
+
+  button{font-family:'IBM Plex Mono',monospace;border:1px solid var(--line);background:var(--surface-2);color:var(--text);border-radius:8px;padding:11px 14px;font-size:13px;cursor:pointer;width:100%;margin-top:10px;}
+  button.primary{background:var(--cyan);color:#06110E;border-color:var(--cyan);font-weight:600;}
+  button:disabled{opacity:0.35;cursor:not-allowed;}
+  button.ghost{background:transparent;color:var(--muted);}
+
+  .perm-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px;width:100%;max-width:400px;text-align:center;}
+  .perm-card .icon{font-size:30px;margin-bottom:10px;display:block;}
+  .perm-card p{color:var(--muted);font-size:13px;line-height:1.6;margin:8px 0 16px;}
+
+  .rawcard textarea{width:100%;min-height:110px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:10px;resize:vertical;}
+  .tag{display:inline-block;font-size:10px;padding:2px 7px;border-radius:5px;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);letter-spacing:0.03em;}
+  .tag.proto{color:var(--cyan);border-color:rgba(55,230,196,0.4);}
+  .log{width:100%;max-width:400px;margin-top:14px;font-size:10.5px;color:var(--muted);max-height:90px;overflow-y:auto;border-top:1px dashed var(--line);padding-top:8px;}
+  .log div{margin-bottom:2px;}
+</style>
+</head>
+<body>
+
+  <h1><span class="dot-live" id="liveDot"></span> QR Receiver</h1>
+  <div class="subtitle">Scans any QR code. Single codes show instantly; multi-part transfers (QRF1/QRF2 protocol) are metered and reassembled with integrity checks.</div>
+
+  <div id="permCard" class="perm-card">
+    <span class="icon">📷</span>
+    <p>Needs camera access to read incoming codes.</p>
+    <button class="primary" id="startBtn">Start scanning</button>
+  </div>
+
+  <div id="viewWrap" style="display:none; width:100%; flex-direction:column; align-items:center;">
+    <div class="viewfinder">
+      <video id="video" playsinline muted></video>
+      <div class="flash" id="flash"></div>
+      <div class="frame-overlay">
+        <div class="corner tl"></div><div class="corner tr"></div>
+        <div class="corner bl"></div><div class="corner br"></div>
+        <div class="sweep" id="sweep"></div>
+      </div>
+    </div>
+    <div class="status-bar">
+      <span>status: <b id="statusText">searching…</b></span>
+      <span id="fpsText"></span>
+    </div>
+  </div>
+
+  <canvas id="canvas" style="display:none;"></canvas>
+
+  <!-- Single / plain QR result -->
+  <div class="card rawcard" id="rawCard">
+    <div class="card-title"><span>Decoded content <span class="tag" id="rawTag">plain</span></span></div>
+    <textarea id="rawText" readonly></textarea>
+    <div class="meta-row"><span>length</span><b id="rawLen">0 chars</b></div>
+    <button class="primary" id="copyBtn">Copy to clipboard</button>
+    <button class="ghost" id="downloadRawBtn">Download as .txt</button>
+    <button class="ghost" id="dismissRawBtn">Dismiss — keep scanning</button>
+  </div>
+
+  <!-- Multi-part transfer -->
+  <div class="card" id="resultCard">
+    <div class="card-title">
+      <span>Incoming transfer <span class="tag proto" id="protoTag">QRF1</span></span>
+      <span id="pct" style="color:var(--cyan);">0%</span>
+    </div>
+    <div class="filename" id="filename">—</div>
+    <div class="meta-row"><span>chunks</span><b><span id="haveCount">0</span> / <span id="totalCount">0</span></b></div>
+    <div class="meta-row"><span>data received</span><b id="byteCount">0 B</b></div>
+    <div class="meta-row"><span>throughput</span><b id="rateText">—</b></div>
+    <div class="meta-row"><span>elapsed / est. remaining</span><b id="etaText">—</b></div>
+    <div class="grid-dots" id="gridDots"></div>
+    <div class="progress-line"><b id="statusLine">reading…</b></div>
+    <div class="integrity" id="integrityBox" style="display:none;"></div>
+    <button class="primary" id="saveBtn" disabled>Waiting for remaining chunks…</button>
+    <button class="ghost" id="resetBtn">Start a new transfer</button>
+  </div>
+
+  <div class="log" id="logBox"></div>
+
+<script>
+(function(){
+  const startBtn = document.getElementById('startBtn');
+  const permCard = document.getElementById('permCard');
+  const viewWrap = document.getElementById('viewWrap');
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const flash = document.getElementById('flash');
+  const statusText = document.getElementById('statusText');
+  const fpsText = document.getElementById('fpsText');
+  const liveDot = document.getElementById('liveDot');
+  const logBox = document.getElementById('logBox');
+
+  const rawCard = document.getElementById('rawCard');
+  const rawTag = document.getElementById('rawTag');
+  const rawTextEl = document.getElementById('rawText');
+  const rawLenEl = document.getElementById('rawLen');
+  const copyBtn = document.getElementById('copyBtn');
+  const downloadRawBtn = document.getElementById('downloadRawBtn');
+  const dismissRawBtn = document.getElementById('dismissRawBtn');
+
+  const resultCard = document.getElementById('resultCard');
+  const protoTag = document.getElementById('protoTag');
+  const filenameEl = document.getElementById('filename');
+  const haveCountEl = document.getElementById('haveCount');
+  const totalCountEl = document.getElementById('totalCount');
+  const byteCountEl = document.getElementById('byteCount');
+  const rateText = document.getElementById('rateText');
+  const etaText = document.getElementById('etaText');
+  const pctEl = document.getElementById('pct');
+  const gridDots = document.getElementById('gridDots');
+  const statusLine = document.getElementById('statusLine');
+  const integrityBox = document.getElementById('integrityBox');
+  const saveBtn = document.getElementById('saveBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  let stream = null;
+  let rafId = null;
+  let sessions = {};
+  let activeId = null;
+  let assembled = null; // {filename, bytes:Uint8Array, mime}
+  let lastDecodeAt = 0;
+  let frameAttempts = 0;
+  let scannedPlainCodes = new Set();
+  let barcodeDetector = null;
+  if ('BarcodeDetector' in window) {
+    try { barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] }); } catch(e) { barcodeDetector = null; }
+  }
+
+  function log(msg){
+    const d = document.createElement('div');
+    const t = new Date().toLocaleTimeString();
+    d.textContent = '[' + t + '] ' + msg;
+    logBox.prepend(d);
+    while (logBox.children.length > 40) logBox.removeChild(logBox.lastChild);
+  }
+
+  // ---- base64 <-> bytes (safe for arbitrary binary, not forced through UTF-8) ----
+  function base64ToBytes(b64){
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+  function bytesToUtf8Safe(bytes){
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch(e){ return null; } // not valid UTF-8 -> treat as binary
+  }
+  function base64UrlSafeDecodeToText(b64){
+    try { return bytesToUtf8Safe(base64ToBytes(b64)); } catch(e){ return null; }
+  }
+
+  // ---- CRC32 for chunk / file integrity checks ----
+  const CRC_TABLE = (function(){
+    const t = new Uint32Array(256);
+    for (let n=0;n<256;n++){
+      let c = n;
+      for (let k=0;k<8;k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(bytes){
+    let c = 0xFFFFFFFF;
+    for (let i=0;i<bytes.length;i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return ((c ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8,'0');
+  }
+  function fmtBytes(n){
+    if (n < 1024) return n + ' B';
+    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    return (n/(1024*1024)).toFixed(2) + ' MB';
+  }
+  function extFromMime(mime){
+    const map = { 'application/json':'json','text/plain':'txt','text/html':'html','image/png':'png',
+      'image/jpeg':'jpg','application/pdf':'pdf','application/octet-stream':'bin','text/csv':'csv' };
+    return map[mime] || 'bin';
+  }
+  function guessMime(filename){
+    const ext = (filename.split('.').pop() || '').toLowerCase();
+    const map = { json:'application/json', txt:'text/plain', html:'text/html', png:'image/png',
+      jpg:'image/jpeg', jpeg:'image/jpeg', pdf:'application/pdf', csv:'text/csv' };
+    return map[ext] || 'application/octet-stream';
+  }
+
+  async function startCamera(){
+    if (!window.isSecureContext) {
+      statusText.textContent = 'insecure page';
+      alert('This page must be loaded over HTTPS (or localhost) for camera access to work.');
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      statusText.textContent = 'unsupported';
+      alert('This browser does not expose camera access. Try Safari or Chrome over https.');
+      return;
+    }
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 1280 } },
+        audio: false
+      });
+    }catch(e){
+      try{ stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+      catch(e2){ statusText.textContent = 'camera denied'; alert('Camera permission is needed to scan.'); return; }
+    }
+    video.srcObject = stream;
+    await video.play();
+    permCard.style.display = 'none';
+    viewWrap.style.display = 'flex';
+    liveDot.classList.add('on');
+
+    const track = stream.getVideoTracks()[0];
+    if (track && track.getCapabilities){
+      const caps = track.getCapabilities();
+      const advanced = [];
+      if (caps.focusMode && caps.focusMode.includes('continuous')) advanced.push({ focusMode: 'continuous' });
+      if (caps.exposureMode && caps.exposureMode.includes('continuous')) advanced.push({ exposureMode: 'continuous' });
+      if (advanced.length) track.applyConstraints({ advanced }).catch(()=>{});
+    }
+    log('camera started');
+    tick();
+  }
+
+  async function tick(){
+    try {
+      if (video.readyState === video.HAVE_ENOUGH_DATA){
+        const w = video.videoWidth, h = video.videoHeight;
+        if (w && h){
+          const maxDim = Math.max(w, h);
+          const scale = maxDim > 1200 ? 1200 / maxDim : 1;
+          canvas.width = Math.max(1, Math.round(w * scale));
+          canvas.height = Math.max(1, Math.round(h * scale));
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          frameAttempts++;
+
+          let decodedText = null;
+          if (barcodeDetector) {
+            try {
+              const codes = await barcodeDetector.detect(canvas);
+              if (codes.length > 0) decodedText = codes[0].rawValue;
+            } catch(e) { /* fall through to jsQR */ }
+          }
+          if (!decodedText) {
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+            if (code && code.data) decodedText = code.data;
+          }
+          if (decodedText) handleDecoded(decodedText);
+          if (!activeId && fpsText) fpsText.textContent = frameAttempts + ' frames scanned';
+        }
+      }
+    } catch (err) {
+      statusText.textContent = 'scan error';
+      log('tick error: ' + (err && err.message ? err.message : err));
+    } finally {
+      rafId = requestAnimationFrame(tick);
+    }
+  }
+
+  function flashOnce(isErr){
+    flash.classList.toggle('err', !!isErr);
+    flash.classList.add('on');
+    setTimeout(() => flash.classList.remove('on'), 120);
+  }
+
+  // ---- Protocol dispatch ----
+  // QRF2:<id>:<index>:<total>:<filenameB64>:<mimeB64>:<chunkCrc>:<fileCrc>:<data>
+  // QRF1:<id>:<index>:<total>:<filenameB64>:<data>                (legacy, no crc, text-only)
+  // anything else -> treated as a standalone plain QR payload
+  function handleDecoded(str){
+    if (str.startsWith('QRF2:')) return handleFramed(str, 'QRF2', 9);
+    if (str.startsWith('QRF1:')) return handleFramed(str, 'QRF1', 6);
+    handlePlain(str);
+  }
+
+  function handlePlain(str){
+    if (scannedPlainCodes.has(str)) return; // avoid re-triggering every frame
+    if (activeId) return; // don't interrupt an in-progress multi-part transfer
+    scannedPlainCodes.add(str);
+    flashOnce(false);
+    if (navigator.vibrate) navigator.vibrate(15);
+    log('single QR decoded (' + str.length + ' chars)');
+    rawTag.textContent = 'plain';
+    rawTextEl.value = str;
+    rawLenEl.textContent = str.length + ' chars';
+    rawCard.classList.add('show');
+    statusText.textContent = 'decoded (single code)';
+  }
+
+  function handleFramed(str, proto, expectedParts){
+    const parts = str.split(':');
+    if (parts.length !== expectedParts) { log(proto + ' malformed frame (part count)'); return; }
+
+    let id, iStr, tStr, fnb64, mimeb64, chunkCrc, fileCrc, data;
+    if (proto === 'QRF2'){
+      [, id, iStr, tStr, fnb64, mimeb64, chunkCrc, fileCrc, data] = parts;
+    } else {
+      [, id, iStr, tStr, fnb64, data] = parts;
+    }
+    const i = parseInt(iStr, 10), t = parseInt(tStr, 10);
+    if (isNaN(i) || isNaN(t) || i < 0 || t <= 0 || i >= t) { log(proto + ' malformed frame (index/total)'); return; }
+
+    // per-chunk integrity check when available (QRF2)
+    if (proto === 'QRF2'){
+      const actualCrc = crc32(new TextEncoder().encode(data));
+      if (actualCrc !== chunkCrc){
+        flashOnce(true);
+        log('chunk ' + i + ' failed CRC check — re-scan needed, ignoring');
+        return;
+      }
+    }
+
+    flashOnce(false);
+    const now = Date.now();
+    if (now - lastDecodeAt > 60 && navigator.vibrate) navigator.vibrate(15);
+    lastDecodeAt = now;
+
+    if (!sessions[id]){
+      let fname = 'received-file.bin';
+      try{ fname = base64UrlSafeDecodeToText(fnb64) || fname; }catch(e){}
+      let mime = null;
+      if (proto === 'QRF2'){ try{ mime = base64UrlSafeDecodeToText(mimeb64); }catch(e){} }
+      sessions[id] = {
+        proto, total: t, filename: fname, mime: mime || guessMime(fname),
+        fileCrc: proto === 'QRF2' ? fileCrc : null,
+        chunks: new Map(), startedAt: now, lastAt: now, bytesReceived: 0
+      };
+      log('new transfer started: ' + fname + ' (' + t + ' chunks, ' + proto + ')');
+    }
+    const s = sessions[id];
+    if (!s.chunks.has(i)){
+      s.chunks.set(i, data);
+      s.bytesReceived += data.length;
+      s.lastAt = now;
+    }
+    activeId = id;
+    renderProgress();
+
+    if (s.chunks.size === s.total) finishTransfer(id);
+  }
+
+  function renderProgress(){
+    if (!activeId || !sessions[activeId]) return;
+    const s = sessions[activeId];
+    rawCard.classList.remove('show');
+    resultCard.classList.add('show');
+    protoTag.textContent = s.proto;
+    filenameEl.textContent = s.filename;
+    haveCountEl.textContent = s.chunks.size;
+    totalCountEl.textContent = s.total;
+    byteCountEl.textContent = fmtBytes(s.bytesReceived) + ' (encoded)';
+
+    const pct = Math.round((s.chunks.size / s.total) * 100);
+    pctEl.textContent = pct + '%';
+
+    const elapsedSec = Math.max(0.001, (s.lastAt - s.startedAt) / 1000);
+    const rate = s.bytesReceived / elapsedSec;
+    rateText.textContent = s.chunks.size > 1 ? (fmtBytes(rate) + '/s') : '—';
+
+    const remaining = s.total - s.chunks.size;
+    const avgPerChunk = s.bytesReceived / s.chunks.size;
+    const estRemainingSec = rate > 0 ? (remaining * avgPerChunk) / rate : 0;
+    etaText.textContent = elapsedSec.toFixed(1) + 's / ' + (remaining === 0 ? '0s' : '~' + estRemainingSec.toFixed(1) + 's');
+
+    statusLine.textContent = s.chunks.size === s.total ? 'all chunks received — verifying…' : ('reading ' + pct + '%');
+    statusText.textContent = s.chunks.size === s.total ? 'complete' : ('reading ' + pct + '%');
+
+    gridDots.innerHTML = '';
+    for (let i=0;i<s.total;i++){
+      const d = document.createElement('div');
+      d.className = 'cdot' + (s.chunks.has(i) ? ' have' : '');
+      d.title = 'chunk ' + i;
+      gridDots.appendChild(d);
+    }
+  }
+
+  function finishTransfer(id){
+    const s = sessions[id];
+    let b64 = '';
+    for (let i=0;i<s.total;i++) b64 += s.chunks.get(i);
+
+    let bytes;
+    try{ bytes = base64ToBytes(b64); }
+    catch(e){
+      statusLine.textContent = 'base64 decode error — a chunk may be corrupt. Try "Start a new transfer".';
+      log('final base64 decode failed: ' + e.message);
+      return;
+    }
+
+    integrityBox.style.display = 'block';
+    if (s.fileCrc){
+      const actual = crc32(bytes);
+      if (actual === s.fileCrc){
+        integrityBox.className = 'integrity ok';
+        integrityBox.textContent = '✓ file checksum verified (crc32 ' + actual + ')';
+      } else {
+        integrityBox.className = 'integrity bad';
+        integrityBox.textContent = '✗ checksum mismatch — expected ' + s.fileCrc + ', got ' + actual + '. File may be corrupted; consider re-scanning.';
+      }
+    } else {
+      integrityBox.className = 'integrity';
+      integrityBox.textContent = 'ⓘ this sender used QRF1 (no checksum) — integrity not verifiable.';
+    }
+
+    assembled = { filename: s.filename, bytes, mime: s.mime };
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save "' + s.filename + '" (' + fmtBytes(bytes.length) + ')';
+    statusLine.textContent = 'complete — ' + fmtBytes(bytes.length) + ' reconstructed';
+    statusText.textContent = 'complete';
+    log('transfer complete: ' + s.filename + ', ' + fmtBytes(bytes.length));
+  }
+
+  async function saveFile(){
+    if (!assembled) return;
+    const blob = new Blob([assembled.bytes], { type: assembled.mime });
+    let outName = assembled.filename;
+    if (!outName.includes('.')) outName += '.' + extFromMime(assembled.mime);
+    const file = new File([blob], outName, { type: assembled.mime });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      try{ await navigator.share({ files: [file], title: outName }); return; }
+      catch(e){ /* fall through to download */ }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = outName;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  function resetAll(){
+    sessions = {}; activeId = null; assembled = null;
+    resultCard.classList.remove('show');
+    integrityBox.style.display = 'none';
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Waiting for remaining chunks…';
+    statusText.textContent = 'searching…';
+    log('reset — ready for new transfer');
+  }
+
+  copyBtn.addEventListener('click', async () => {
+    try{ await navigator.clipboard.writeText(rawTextEl.value); copyBtn.textContent = 'Copied ✓'; setTimeout(()=>copyBtn.textContent='Copy to clipboard', 1200); }
+    catch(e){ rawTextEl.select(); document.execCommand('copy'); }
+  });
+  downloadRawBtn.addEventListener('click', () => {
+    const blob = new Blob([rawTextEl.value], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'scanned-code.txt';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  });
+  dismissRawBtn.addEventListener('click', () => { rawCard.classList.remove('show'); });
+
+  startBtn.addEventListener('click', startCamera);
+  saveBtn.addEventListener('click', saveFile);
+  resetBtn.addEventListener('click', resetAll);
+
+  window.addEventListener('beforeunload', () => {
+    if (rafId) cancelAnimationFrame(rafId);
+    if (stream) stream.getTracks().forEach(t => t.stop());
+  });
+})();
+</script>
+</body>
+</html>
