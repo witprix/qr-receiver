@@ -384,14 +384,30 @@
   // Pipe format has no explicit transfer id, so all chunks sharing the same
   // (filename,total) are treated as one session — this matches senders that
   // just cycle "i/total|filename|data" frames for a single file.
+  // Some senders are 1-based (i/total, i=1..total), some are 0-based
+  // (i=0..total-1), and a few are inconsistent between frames (e.g. a
+  // trailing footer/checksum frame that reuses index 0). Rather than reject
+  // a frame outright, try both interpretations and accept whichever lands
+  // inside the valid range for this session's known total.
+  function resolvePipeIndex(idxRaw, total){
+    const zeroBased = idxRaw;
+    const oneBased = idxRaw - 1;
+    if (oneBased >= 0 && oneBased < total) return oneBased; // preferred: matches the format's documented convention
+    if (zeroBased >= 0 && zeroBased < total) return zeroBased;
+    return null;
+  }
+
   function handlePipeFormat(match){
-    const idxRaw = parseInt(match[1], 10);   // sender uses 1-based index here
+    const idxRaw = parseInt(match[1], 10);
     const total = parseInt(match[2], 10);
     const filename = match[3];
     const data = match[4];
-    if (isNaN(idxRaw) || isNaN(total) || total <= 0) { log('pipe format malformed index/total'); return; }
-    const i = idxRaw - 1; // normalize to 0-based internally
-    if (i < 0 || i >= total) { log('pipe format index out of range'); return; }
+    if (isNaN(idxRaw) || isNaN(total) || total <= 0) { log('pipe format malformed index/total: "' + match[1] + '/' + match[2] + '"'); return; }
+    const i = resolvePipeIndex(idxRaw, total);
+    if (i === null) {
+      log('pipe format index out of range — raw="' + idxRaw + '/' + total + '" (tried 0- and 1-based, neither fits 0..' + (total-1) + '). Likely an off-by-one on the sender side for this frame.');
+      return;
+    }
 
     if (!looksLikeBase64(data)) { flashOnce(true); log('PIPE chunk ' + i + ' has non-base64 payload — rejected'); return; }
 
