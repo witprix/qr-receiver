@@ -346,11 +346,51 @@
   // ---- Protocol dispatch ----
   // QRF2:<id>:<index>:<total>:<filenameB64>:<mimeB64>:<chunkCrc>:<fileCrc>:<data>
   // QRF1:<id>:<index>:<total>:<filenameB64>:<data>                (legacy, no crc, text-only)
+  // <index>/<total>|<filename>|<base64data>                      (pipe format, plain filename, no transfer id)
   // anything else -> treated as a standalone plain QR payload
+  const PIPE_RE = /^(\d+)\/(\d+)\|([^|]+)\|([\s\S]+)$/;
   function handleDecoded(str){
     if (str.startsWith('QRF2:')) return handleFramed(str, 'QRF2', 9);
     if (str.startsWith('QRF1:')) return handleFramed(str, 'QRF1', 6);
+    const pipeMatch = str.match(PIPE_RE);
+    if (pipeMatch) return handlePipeFormat(pipeMatch);
     handlePlain(str);
+  }
+
+  // Pipe format has no explicit transfer id, so all chunks sharing the same
+  // (filename,total) are treated as one session — this matches senders that
+  // just cycle "i/total|filename|data" frames for a single file.
+  function handlePipeFormat(match){
+    const idxRaw = parseInt(match[1], 10);   // sender uses 1-based index here
+    const total = parseInt(match[2], 10);
+    const filename = match[3];
+    const data = match[4];
+    if (isNaN(idxRaw) || isNaN(total) || total <= 0) { log('pipe format malformed index/total'); return; }
+    const i = idxRaw - 1; // normalize to 0-based internally
+    if (i < 0 || i >= total) { log('pipe format index out of range'); return; }
+
+    const id = 'pipe:' + filename + ':' + total; // stable session key, no explicit id needed
+    flashOnce(false);
+    const now = Date.now();
+    if (now - lastDecodeAt > 60 && navigator.vibrate) navigator.vibrate(15);
+    lastDecodeAt = now;
+
+    if (!sessions[id]){
+      sessions[id] = {
+        proto: 'PIPE', total, filename, mime: guessMime(filename),
+        fileCrc: null, chunks: new Map(), startedAt: now, lastAt: now, bytesReceived: 0
+      };
+      log('new transfer started: ' + filename + ' (' + total + ' chunks, PIPE)');
+    }
+    const s = sessions[id];
+    if (!s.chunks.has(i)){
+      s.chunks.set(i, data);
+      s.bytesReceived += data.length;
+      s.lastAt = now;
+    }
+    activeId = id;
+    renderProgress();
+    if (s.chunks.size === s.total) finishTransfer(id);
   }
 
   function handlePlain(str){
