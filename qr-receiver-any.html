@@ -202,11 +202,26 @@
   let assembled = null; // {filename, bytes:Uint8Array, mime}
   let lastDecodeAt = 0;
   let frameAttempts = 0;
+  let decodeAttempts = 0;
   let scannedPlainCodes = new Set();
   let barcodeDetector = null;
   if ('BarcodeDetector' in window) {
     try { barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] }); } catch(e) { barcodeDetector = null; }
   }
+
+  // ---- perf: throttle decode work instead of running full-res decode every rAF tick ----
+  const DECODE_INTERVAL_MS = 90;   // ~11 decode attempts/sec is plenty for QR and much cheaper than 60fps
+  const DECODE_MAX_DIM = 900;      // downscale before decode; large frames make jsQR disproportionately slower
+  let lastTickAt = 0;
+  let scanningPaused = false;
+
+  const BASE64_CHARS_RE = /^[A-Za-z0-9+/=\r\n]+$/;
+  function looksLikeBase64(s){ return s.length > 0 && BASE64_CHARS_RE.test(s); }
+
+  document.addEventListener('visibilitychange', () => {
+    scanningPaused = document.hidden;
+    if (!scanningPaused && stream) { lastTickAt = 0; tick(); }
+  });
 
   function log(msg){
     const d = document.createElement('div');
@@ -301,17 +316,28 @@
     tick();
   }
 
-  async function tick(){
+  async function tick(timestamp){
+    if (scanningPaused) return; // resumed by visibilitychange handler
+    rafId = requestAnimationFrame(tick);
+
+    // Throttle: skip most rAF ticks and only run the (comparatively expensive)
+    // decode pipeline on a fixed cadence. Video frames don't change fast enough
+    // to need 60 decode attempts/sec, and this is the single biggest win for
+    // battery life and avoiding jank on the flash/sweep animations.
+    if (timestamp && timestamp - lastTickAt < DECODE_INTERVAL_MS) return;
+    lastTickAt = timestamp || performance.now();
+
     try {
       if (video.readyState === video.HAVE_ENOUGH_DATA){
         const w = video.videoWidth, h = video.videoHeight;
         if (w && h){
           const maxDim = Math.max(w, h);
-          const scale = maxDim > 1200 ? 1200 / maxDim : 1;
+          const scale = maxDim > DECODE_MAX_DIM ? DECODE_MAX_DIM / maxDim : 1;
           canvas.width = Math.max(1, Math.round(w * scale));
           canvas.height = Math.max(1, Math.round(h * scale));
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           frameAttempts++;
+          decodeAttempts++;
 
           let decodedText = null;
           if (barcodeDetector) {
@@ -326,14 +352,12 @@
             if (code && code.data) decodedText = code.data;
           }
           if (decodedText) handleDecoded(decodedText);
-          if (!activeId && fpsText) fpsText.textContent = frameAttempts + ' frames scanned';
+          if (!activeId && fpsText) fpsText.textContent = decodeAttempts + ' decode passes';
         }
       }
     } catch (err) {
       statusText.textContent = 'scan error';
       log('tick error: ' + (err && err.message ? err.message : err));
-    } finally {
-      rafId = requestAnimationFrame(tick);
     }
   }
 
@@ -369,28 +393,22 @@
     const i = idxRaw - 1; // normalize to 0-based internally
     if (i < 0 || i >= total) { log('pipe format index out of range'); return; }
 
+    if (!looksLikeBase64(data)) { flashOnce(true); log('PIPE chunk ' + i + ' has non-base64 payload — rejected'); return; }
+
     const id = 'pipe:' + filename + ':' + total; // stable session key, no explicit id needed
-    flashOnce(false);
     const now = Date.now();
-    if (now - lastDecodeAt > 60 && navigator.vibrate) navigator.vibrate(15);
-    lastDecodeAt = now;
 
     if (!sessions[id]){
       sessions[id] = {
         proto: 'PIPE', total, filename, mime: guessMime(filename),
-        fileCrc: null, chunks: new Map(), startedAt: now, lastAt: now, bytesReceived: 0
+        fileCrc: null, chunks: new Map(), conflicts: new Set(), completed: false,
+        startedAt: now, lastAt: now, bytesReceived: 0
       };
       log('new transfer started: ' + filename + ' (' + total + ' chunks, PIPE)');
     }
-    const s = sessions[id];
-    if (!s.chunks.has(i)){
-      s.chunks.set(i, data);
-      s.bytesReceived += data.length;
-      s.lastAt = now;
-    }
-    activeId = id;
-    renderProgress();
-    if (s.chunks.size === s.total) finishTransfer(id);
+    storeChunk(sessions[id], i, data, now);
+    maybeAdoptActive(id);
+    if (sessions[id].chunks.size === sessions[id].total) finishTransfer(id);
   }
 
   function handlePlain(str){
@@ -420,6 +438,10 @@
     const i = parseInt(iStr, 10), t = parseInt(tStr, 10);
     if (isNaN(i) || isNaN(t) || i < 0 || t <= 0 || i >= t) { log(proto + ' malformed frame (index/total)'); return; }
 
+    // reject anything whose payload isn't valid base64 alphabet before it ever
+    // enters a session — a garbled scan shouldn't get to poison the reassembly
+    if (!looksLikeBase64(data)) { flashOnce(true); log(proto + ' chunk ' + i + ' has non-base64 payload — rejected'); return; }
+
     // per-chunk integrity check when available (QRF2)
     if (proto === 'QRF2'){
       const actualCrc = crc32(new TextEncoder().encode(data));
@@ -430,10 +452,7 @@
       }
     }
 
-    flashOnce(false);
     const now = Date.now();
-    if (now - lastDecodeAt > 60 && navigator.vibrate) navigator.vibrate(15);
-    lastDecodeAt = now;
 
     if (!sessions[id]){
       let fname = 'received-file.bin';
@@ -443,20 +462,50 @@
       sessions[id] = {
         proto, total: t, filename: fname, mime: mime || guessMime(fname),
         fileCrc: proto === 'QRF2' ? fileCrc : null,
-        chunks: new Map(), startedAt: now, lastAt: now, bytesReceived: 0
+        chunks: new Map(), conflicts: new Set(), completed: false,
+        startedAt: now, lastAt: now, bytesReceived: 0
       };
       log('new transfer started: ' + fname + ' (' + t + ' chunks, ' + proto + ')');
     }
-    const s = sessions[id];
-    if (!s.chunks.has(i)){
-      s.chunks.set(i, data);
-      s.bytesReceived += data.length;
-      s.lastAt = now;
-    }
-    activeId = id;
-    renderProgress();
+    storeChunk(sessions[id], i, data, now);
+    maybeAdoptActive(id);
 
-    if (s.chunks.size === s.total) finishTransfer(id);
+    if (sessions[id].chunks.size === sessions[id].total) finishTransfer(id);
+  }
+
+  // Two scans of the same index should agree. If they don't, keep the first
+  // (already-vibrated-and-accepted) copy but flag it visibly rather than
+  // silently overwriting good data with a misread — or vice versa.
+  function storeChunk(s, i, data, now){
+    if (s.chunks.has(i)){
+      if (s.chunks.get(i) !== data) {
+        s.conflicts.add(i);
+        log('chunk ' + i + ' re-scanned with different content — keeping first copy, flagged as conflict');
+      }
+      return;
+    }
+    s.chunks.set(i, data);
+    s.bytesReceived += data.length;
+    s.lastAt = now;
+    flashOnce(false);
+    if (now - lastDecodeAt > 60 && navigator.vibrate) navigator.vibrate(15);
+    lastDecodeAt = now;
+    renderProgress();
+  }
+
+  // Only let a transfer take over the visible UI if nothing else is actively
+  // in progress — otherwise two interleaved senders (or stray misreads that
+  // start a bogus session) would make the progress card thrash between them.
+  // Chunks for the non-active session are still collected in `sessions` so
+  // switching back later doesn't lose data.
+  function maybeAdoptActive(id){
+    const current = activeId ? sessions[activeId] : null;
+    if (!current || current.completed || activeId === id) {
+      activeId = id;
+      renderProgress();
+    } else {
+      log('chunk received for a different transfer (' + id + ') — finish or reset the current one to switch');
+    }
   }
 
   function renderProgress(){
@@ -488,14 +537,19 @@
     gridDots.innerHTML = '';
     for (let i=0;i<s.total;i++){
       const d = document.createElement('div');
-      d.className = 'cdot' + (s.chunks.has(i) ? ' have' : '');
-      d.title = 'chunk ' + i;
+      const conflict = s.conflicts.has(i);
+      d.className = 'cdot' + (conflict ? ' bad' : (s.chunks.has(i) ? ' have' : ''));
+      d.title = 'chunk ' + i + (conflict ? ' (conflicting re-scan — kept first copy)' : '');
       gridDots.appendChild(d);
+    }
+    if (s.conflicts.size > 0){
+      statusLine.textContent += ' — ' + s.conflicts.size + ' chunk(s) had conflicting re-scans';
     }
   }
 
   function finishTransfer(id){
     const s = sessions[id];
+    s.completed = true;
     let b64 = '';
     for (let i=0;i<s.total;i++) b64 += s.chunks.get(i);
 
@@ -519,7 +573,11 @@
       }
     } else {
       integrityBox.className = 'integrity';
-      integrityBox.textContent = 'ⓘ this sender used QRF1 (no checksum) — integrity not verifiable.';
+      integrityBox.textContent = 'ⓘ this sender used ' + s.proto + ' (no checksum) — integrity not verifiable.';
+    }
+    if (s.conflicts.size > 0){
+      integrityBox.textContent += ' ⚠ ' + s.conflicts.size + ' chunk(s) had a conflicting re-scan during capture — worth re-transferring if this file matters.';
+      if (integrityBox.className === 'integrity ok') integrityBox.className = 'integrity'; // don't show a clean "verified" look alongside a conflict warning
     }
 
     assembled = { filename: s.filename, bytes, mime: s.mime };
@@ -547,6 +605,21 @@
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
+
+  // Drop incomplete, inactive sessions that haven't seen a new chunk in a
+  // while — guards against a stray misread starting a phantom session that
+  // never finishes and just sits in memory.
+  const STALE_SESSION_MS = 45000;
+  setInterval(() => {
+    const now = Date.now();
+    for (const id of Object.keys(sessions)){
+      const s = sessions[id];
+      if (id !== activeId && !s.completed && (now - s.lastAt) > STALE_SESSION_MS){
+        delete sessions[id];
+        log('dropped stale/incomplete session: ' + s.filename);
+      }
+    }
+  }, 15000);
 
   function resetAll(){
     sessions = {}; activeId = null; assembled = null;
