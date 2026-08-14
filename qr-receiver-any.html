@@ -390,12 +390,14 @@
   // (i=0..total-1), and a few are inconsistent between frames (e.g. a
   // trailing footer/checksum frame that reuses index 0). Rather than reject
   // a frame outright, try both interpretations and accept whichever lands
-  // inside the valid range for this session's known total.
+  // inside the valid range for this session's known total. Returns the
+  // resolved 0-based index plus which convention matched, so the session
+  // can learn the sender's actual labeling scheme from majority vote.
   function resolvePipeIndex(idxRaw, total){
-    const zeroBased = idxRaw;
     const oneBased = idxRaw - 1;
-    if (oneBased >= 0 && oneBased < total) return oneBased; // preferred: matches the format's documented convention
-    if (zeroBased >= 0 && zeroBased < total) return zeroBased;
+    if (oneBased >= 0 && oneBased < total) return { index: oneBased, base: 1 };
+    const zeroBased = idxRaw;
+    if (zeroBased >= 0 && zeroBased < total) return { index: zeroBased, base: 0 };
     return null;
   }
 
@@ -405,28 +407,44 @@
     const filename = match[3];
     const data = match[4];
     if (isNaN(idxRaw) || isNaN(total) || total <= 0) { log('pipe format malformed index/total: "' + match[1] + '/' + match[2] + '"'); return; }
-    const i = resolvePipeIndex(idxRaw, total);
-    if (i === null) {
-      log('pipe format index out of range — raw="' + idxRaw + '/' + total + '" (tried 0- and 1-based, neither fits 0..' + (total-1) + '). Likely an off-by-one on the sender side for this frame.');
-      return;
-    }
 
-    if (!looksLikeBase64(data)) { flashOnce(true); log('PIPE chunk ' + i + ' has non-base64 payload — rejected'); return; }
-
-    const id = 'pipe:' + filename + ':' + total; // stable session key, no explicit id needed
+    // Keyed by filename only — NOT total. Some senders report a slightly
+    // different `total` on their last/first frame (off-by-one in their own
+    // chunking math); keying on total would silently spawn a second,
+    // never-completing session for that one frame every loop, which looks
+    // exactly like "stuck missing 1 chunk forever" even though the sender
+    // is genuinely cycling through everything.
+    const id = 'pipe:' + filename;
     const now = Date.now();
 
     if (!sessions[id]){
       sessions[id] = {
         proto: 'PIPE', total, filename, mime: guessMime(filename),
         fileCrc: null, chunks: new Map(), conflicts: new Set(), completed: false,
-        startedAt: now, lastAt: now, bytesReceived: 0
+        startedAt: now, lastAt: now, bytesReceived: 0,
+        baseVotes: { 0: 0, 1: 0 }
       };
       log('new transfer started: ' + filename + ' (' + total + ' chunks, PIPE)');
     }
-    storeChunk(sessions[id], i, data, now);
+    const s = sessions[id];
+    if (total !== s.total){
+      log('⚠ frame "' + idxRaw + '/' + total + '" reports a different total than the session (' + s.total + ') — keeping the session total, resolving this frame\'s index against it.');
+    }
+    // resolve against the session's established total, not this frame's total,
+    // in case this one frame's total field is the inconsistent one
+    const resolved = resolvePipeIndex(idxRaw, s.total);
+    if (resolved === null) {
+      log('pipe frame "' + idxRaw + '/' + total + '" doesn\'t fit session total ' + s.total + ' under either indexing convention — rejected. Raw data preview: ' + data.slice(0,24) + (data.length>24?'…':''));
+      return;
+    }
+    const i = resolved.index;
+    if (!looksLikeBase64(data)) { flashOnce(true); log('PIPE chunk ' + i + ' has non-base64 payload — rejected'); return; }
+    log('pipe frame "' + idxRaw + '/' + total + '" resolved → chunk index ' + i + (s.chunks.has(i) ? ' (already had this one)' : ' (new)'));
+
+    s.baseVotes[resolved.base]++;
+    storeChunk(s, i, data, now);
     maybeAdoptActive(id);
-    if (sessions[id].chunks.size === sessions[id].total) finishTransfer(id);
+    if (s.chunks.size === s.total) finishTransfer(id);
   }
 
   function handlePlain(str){
@@ -566,17 +584,18 @@
 
     const missingBox = document.getElementById('missingBox');
     if (missing.length > 0){
-      // We don't know for certain whether this sender labels frames 0-based
-      // or 1-based (see resolvePipeIndex), so show both possible on-screen
-      // labels to look for when re-scanning.
-      const labels = missing.map(i => {
-        const oneBased = i + 1;
-        return (s.proto === 'PIPE')
-          ? ('"' + oneBased + '/' + s.total + '" (or "' + i + '/' + s.total + '" if this sender counts from 0)')
-          : ('#' + oneBased + ' (internal index ' + i + ')');
-      });
+      let lines;
+      if (s.proto === 'PIPE'){
+        // Use whichever indexing convention this sender has actually shown
+        // itself to use (from the chunks we've already matched), so we give
+        // one specific label to look for instead of a vague guess.
+        const base = s.baseVotes[1] >= s.baseVotes[0] ? 1 : 0;
+        lines = missing.map(i => 'Chunk ' + (i + 1) + ' of ' + s.total + ' — look for the QR labeled "' + (i + base) + '/' + s.total + '"');
+      } else {
+        lines = missing.map(i => 'Chunk ' + (i + 1) + ' of ' + s.total);
+      }
       missingBox.style.display = 'block';
-      missingBox.innerHTML = '<b>Missing ' + missing.length + ' chunk(s):</b><br>' + labels.join('<br>');
+      missingBox.innerHTML = '<b>Still missing:</b><br>' + lines.join('<br>');
     } else {
       missingBox.style.display = 'none';
     }
