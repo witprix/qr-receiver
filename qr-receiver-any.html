@@ -79,9 +79,10 @@
 
   .progress-line{font-size:12px;color:var(--muted);margin-top:10px;}
   .progress-line b{color:var(--text);}
-  .integrity{font-size:11.5px;margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);}
+  .integrity{font-size:11.5px;margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);line-height:1.6;}
   .integrity.ok{color:var(--ok);border-color:rgba(55,230,196,0.4);}
   .integrity.bad{color:var(--danger);border-color:rgba(255,107,107,0.4);}
+  #missingBox{color:var(--amber);border-color:rgba(255,180,84,0.4);}
 
   button{font-family:'IBM Plex Mono',monospace;border:1px solid var(--line);background:var(--surface-2);color:var(--text);border-radius:8px;padding:11px 14px;font-size:13px;cursor:pointer;width:100%;margin-top:10px;}
   button.primary{background:var(--cyan);color:#06110E;border-color:var(--cyan);font-weight:600;}
@@ -150,6 +151,7 @@
     <div class="meta-row"><span>throughput</span><b id="rateText">—</b></div>
     <div class="meta-row"><span>elapsed / est. remaining</span><b id="etaText">—</b></div>
     <div class="grid-dots" id="gridDots"></div>
+    <div class="integrity" id="missingBox" style="display:none; margin-top:8px;"></div>
     <div class="progress-line"><b id="statusLine">reading…</b></div>
     <div class="integrity" id="integrityBox" style="display:none;"></div>
     <button class="primary" id="saveBtn" disabled>Waiting for remaining chunks…</button>
@@ -551,13 +553,34 @@
     statusText.textContent = s.chunks.size === s.total ? 'complete' : ('reading ' + pct + '%');
 
     gridDots.innerHTML = '';
+    const missing = [];
     for (let i=0;i<s.total;i++){
       const d = document.createElement('div');
       const conflict = s.conflicts.has(i);
-      d.className = 'cdot' + (conflict ? ' bad' : (s.chunks.has(i) ? ' have' : ''));
-      d.title = 'chunk ' + i + (conflict ? ' (conflicting re-scan — kept first copy)' : '');
+      const have = s.chunks.has(i);
+      d.className = 'cdot' + (conflict ? ' bad' : (have ? ' have' : ''));
+      d.title = 'chunk ' + i + (conflict ? ' (conflicting re-scan — kept first copy)' : (have ? ' — received' : ' — missing'));
       gridDots.appendChild(d);
+      if (!have) missing.push(i);
     }
+
+    const missingBox = document.getElementById('missingBox');
+    if (missing.length > 0){
+      // We don't know for certain whether this sender labels frames 0-based
+      // or 1-based (see resolvePipeIndex), so show both possible on-screen
+      // labels to look for when re-scanning.
+      const labels = missing.map(i => {
+        const oneBased = i + 1;
+        return (s.proto === 'PIPE')
+          ? ('"' + oneBased + '/' + s.total + '" (or "' + i + '/' + s.total + '" if this sender counts from 0)')
+          : ('#' + oneBased + ' (internal index ' + i + ')');
+      });
+      missingBox.style.display = 'block';
+      missingBox.innerHTML = '<b>Missing ' + missing.length + ' chunk(s):</b><br>' + labels.join('<br>');
+    } else {
+      missingBox.style.display = 'none';
+    }
+
     if (s.conflicts.size > 0){
       statusLine.textContent += ' — ' + s.conflicts.size + ' chunk(s) had conflicting re-scans';
     }
