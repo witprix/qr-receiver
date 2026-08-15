@@ -206,9 +206,39 @@
   let frameAttempts = 0;
   let decodeAttempts = 0;
   let scannedPlainCodes = new Set();
+  let gridDotsSessionId = null; // which session's dot elements are currently attached to #gridDots
   let barcodeDetector = null;
   if ('BarcodeDetector' in window) {
     try { barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] }); } catch(e) { barcodeDetector = null; }
+  }
+
+  // ---- perf: run jsQR in a worker instead of on the main thread ----
+  // BarcodeDetector (when available) already decodes natively off-thread, so
+  // this only matters for browsers without it (notably Safari/iOS) — but
+  // those are exactly the browsers where a synchronous jsQR call on every
+  // decode tick would otherwise stall rendering and make the sweep/flash
+  // animations stutter. One frame is ever in flight at a time; if the worker
+  // is still busy when the next decode tick fires, that tick is just skipped
+  // rather than queued, so the worker never falls behind.
+  let qrWorker = null;
+  let workerBusy = false;
+  if (typeof Worker !== 'undefined') {
+    try {
+      const workerSrc = `
+        importScripts('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js');
+        onmessage = function(e){
+          const { data, width, height } = e.data;
+          let result = null;
+          try {
+            const code = jsQR(data, width, height, { inversionAttempts: 'attemptBoth' });
+            if (code && code.data) result = code.data;
+          } catch(err) { /* ignore malformed frame */ }
+          postMessage(result);
+        };
+      `;
+      const blob = new Blob([workerSrc], { type: 'application/javascript' });
+      qrWorker = new Worker(URL.createObjectURL(blob));
+    } catch(e) { qrWorker = null; }
   }
 
   // ---- perf: throttle decode work instead of running full-res decode every rAF tick ----
@@ -348,7 +378,15 @@
               if (codes.length > 0) decodedText = codes[0].rawValue;
             } catch(e) { /* fall through to jsQR */ }
           }
-          if (!decodedText) {
+          if (!decodedText && qrWorker && !workerBusy) {
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            workerBusy = true;
+            qrWorker.postMessage(
+              { data: imageData.data, width: imageData.width, height: imageData.height },
+              [imageData.data.buffer]
+            );
+          } else if (!decodedText && !qrWorker) {
+            // No worker support at all — fall back to a synchronous decode.
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
             if (code && code.data) decodedText = code.data;
@@ -361,6 +399,14 @@
       statusText.textContent = 'scan error';
       log('tick error: ' + (err && err.message ? err.message : err));
     }
+  }
+
+  if (qrWorker) {
+    qrWorker.onmessage = (e) => {
+      workerBusy = false;
+      if (e.data) handleDecoded(e.data);
+    };
+    qrWorker.onerror = () => { workerBusy = false; };
   }
 
   function flashOnce(isErr){
@@ -570,15 +616,29 @@
     statusLine.textContent = s.chunks.size === s.total ? 'all chunks received — verifying…' : ('reading ' + pct + '%');
     statusText.textContent = s.chunks.size === s.total ? 'complete' : ('reading ' + pct + '%');
 
-    gridDots.innerHTML = '';
+    // Reuse dot elements across renders instead of clearing + recreating all
+    // of them on every single chunk arrival — for large transfers (hundreds
+    // of chunks) that rebuild was O(total) DOM churn on every scan.
+    if (!s.dotEls || s.dotEls.length !== s.total || gridDotsSessionId !== activeId) {
+      gridDots.innerHTML = '';
+      s.dotEls = new Array(s.total);
+      const frag = document.createDocumentFragment();
+      for (let i=0;i<s.total;i++){
+        const d = document.createElement('div');
+        s.dotEls[i] = d;
+        frag.appendChild(d);
+      }
+      gridDots.appendChild(frag);
+      gridDotsSessionId = activeId;
+    }
     const missing = [];
     for (let i=0;i<s.total;i++){
-      const d = document.createElement('div');
       const conflict = s.conflicts.has(i);
       const have = s.chunks.has(i);
-      d.className = 'cdot' + (conflict ? ' bad' : (have ? ' have' : ''));
+      const cls = 'cdot' + (conflict ? ' bad' : (have ? ' have' : ''));
+      const d = s.dotEls[i];
+      if (d.className !== cls) d.className = cls;
       d.title = 'chunk ' + i + (conflict ? ' (conflicting re-scan — kept first copy)' : (have ? ' — received' : ' — missing'));
-      gridDots.appendChild(d);
       if (!have) missing.push(i);
     }
 
@@ -646,17 +706,14 @@
     log('transfer complete: ' + s.filename + ', ' + fmtBytes(bytes.length));
   }
 
-  async function saveFile(){
+  function saveFile(){
     if (!assembled) return;
     const blob = new Blob([assembled.bytes], { type: assembled.mime });
     let outName = assembled.filename;
     if (!outName.includes('.')) outName += '.' + extFromMime(assembled.mime);
-    const file = new File([blob], outName, { type: assembled.mime });
 
-    if (navigator.canShare && navigator.canShare({ files: [file] })){
-      try{ await navigator.share({ files: [file], title: outName }); return; }
-      catch(e){ /* fall through to download */ }
-    }
+    // Straight download — no share-sheet detour. As soon as reassembly is
+    // done and the user taps Save, the file just lands in Downloads.
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = outName;
@@ -710,6 +767,7 @@
   window.addEventListener('beforeunload', () => {
     if (rafId) cancelAnimationFrame(rafId);
     if (stream) stream.getTracks().forEach(t => t.stop());
+    if (qrWorker) qrWorker.terminate();
   });
 })();
 </script>
